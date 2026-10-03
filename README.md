@@ -1,53 +1,86 @@
 # HDA — Electricity Maps ETL Pipeline
 
-A Python ETL project that ingests Electricity Maps market data for France and turns it into a Bronze → Silver → Gold medallion pipeline using Polars and Delta/Parquet storage.
+A Python ETL project that ingests Electricity Maps market data for France and transforms it through a Bronze → Silver → Gold medallion architecture using Polars and Delta/Parquet storage.
 
-## Overview
+## Key features
 
-This repository downloads the raw hourly generation mix and cross-border flow payloads for a target zone, stores the immutable API responses in Bronze, normalizes them into typed Silver tables, and then computes business-level Gold aggregates such as daily net imports, daily net exports, and relative generation mix.
+- Ingests Electricity Maps generation mix and cross-border flow data.
+- Preserves raw API responses as immutable Bronze data.
+- Normalizes nested API payloads into typed Silver tables.
+- Produces business-oriented Gold aggregates for daily imports, exports, and relative generation mix.
+- Uses Polars for local columnar transformations.
+- Writes processed datasets to Delta and Parquet.
+- Includes unit tests and GitHub Actions CI.
+- Uses business keys to prevent duplicate logical rows during reprocessing.
 
-The implementation is designed to be simple, auditable, and idempotent: each ingestion is written as a new raw file, transformations are explicit, and downstream tables are built from the normalized silver layer rather than directly from the API JSON.
+## Architecture
 
----
+```text
+                    Electricity Maps API
+                    generation mix + flows
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │ Bronze — Raw JSON│
+                    │ Immutable payload│
+                    │ + ingestion meta │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ Silver — Normalized
+                    │ Typed / flattened │
+                    │ Delta + Parquet   │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ Gold — Aggregates │
+                    │ Daily imports     │
+                    │ Daily exports     │
+                    │ Relative mix     │
+                    └──────────────────┘
+```
 
-## Installation and environment setup
+The pipeline is designed to be simple, auditable, and replayable. Raw API responses are retained so downstream transformations can be rerun when transformation logic changes.
 
-Requirements:
+## Installation
+
+### Requirements
 
 - Python 3.11+
 - A valid Electricity Maps API key
-- A local environment
+- A local Python environment
 
-Setup:
+### Setup
 
 ```bash
 git clone https://github.com/TCACastelijns/hda-electricity-maps-etl.git
 cd hda-electricity-maps-etl
+
 python3.11 -m venv .venv
 source .venv/bin/activate
+
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev]"
 ```
 
-Set the API key:
+Configure the API key using the project's supported configuration mechanism. For a local `.env` workflow:
 
 ```bash
 cp .env.example .env
 export ELECTRICITY_MAPS_API_KEY="<your-api-key>"
 ```
 
-If you are using a different API base URL, set it in the configuration object or environment value used by the project.
+If a different Electricity Maps API base URL is required, configure it through the project's `Settings` object or the corresponding environment configuration.
 
----
+## Quick start
 
-## How to run the pipeline
-
-The pipeline entrypoint is the `run_pipeline` function in the project’s orchestration layer. It performs the end-to-end flow for a single zone.
-
-Example:
+The main orchestration entrypoint is `run_pipeline`.
 
 ```python
 from pathlib import Path
+
 from hda_etl.config import Settings
 from hda_etl.pipeline import run_pipeline
 
@@ -64,283 +97,272 @@ run_pipeline(
 )
 ```
 
-Equivalent CLI-style flow (depending on your project entrypoint):
+If the installed CLI exposes the project entrypoint, the equivalent command is:
 
 ```bash
 hda-etl run --data-root data --zone FR
 ```
 
-The run sequence is:
+The pipeline executes the following stages:
 
-1. Fetch raw market data for mix and flows.
-2. Write immutable Bronze files with ingestion metadata embedded in the JSON.
-3. Read Bronze JSON files and flatten nested payloads into Silver tables.
-4. Write Silver tables to Delta and Parquet partitions.
-5. Join zone metadata and compute daily Gold metrics.
-6. Persist Gold results as Delta and Parquet outputs.
+1. Fetch raw generation mix and cross-border flow data.
+2. Write immutable Bronze JSON files with ingestion metadata.
+3. Read Bronze JSON and flatten nested payloads.
+4. Write normalized Silver data to Delta and Parquet.
+5. Fetch zone metadata and enrich the normalized data.
+6. Compute daily Gold aggregates.
+7. Persist Gold results to Delta and Parquet.
 
----
+## Example run
 
-## Design decisions
+A representative France ingestion looks like:
 
-### 1. Bronze is immutable
+```text
+[INFO] 2026-10-03 11:39:17 - Connecting with ElectricityMapsClient.
+[INFO] 2026-10-03 11:39:17 - Bronze data:
+[INFO] 2026-10-03 11:39:17 - Fetch mix_payload and flow_payload JSON data
+[INFO] 2026-10-03 11:39:17 - Loaded JSON to data/bronze/electricity_mix/year=2026/month=10/day=03/20261003T093917119234Z.json: 24 history records.
+[INFO] 2026-10-03 11:39:17 - Loaded JSON to data/bronze/electricity_flows/year=2026/month=10/day=03/20261003T093917119234Z.json: 24 history records.
+[INFO] 2026-10-03 11:39:17 - Silver data:
+[INFO] 2026-10-03 11:39:17 - Flatten nested columns.
+[INFO] 2026-10-03 11:39:22 - Loaded to data/silver/electricity_mix_delta: (24, 27)
+[INFO] 2026-10-03 11:39:22 - Loaded to data/silver/electricity_flows_delta: (179, 11)
+[INFO] 2026-10-03 11:39:22 - Gold data:
+[INFO] 2026-10-03 11:39:22 - Loaded to data/gold/electricity_imports_daily_delta: (9, 7)
+[INFO] 2026-10-03 11:39:22 - Loaded to data/gold/electricity_exports_daily_delta: (13, 7)
+[INFO] 2026-10-03 11:39:22 - Loaded to data/gold/electricity_relative_mix_daily_delta: (2, 14)
+```
 
-Raw API payloads are written once and never edited in-place. This preserves lineage and allows transformation replay if data corrections or business logic changes.
+The exact row counts depend on the API range and the hours returned by Electricity Maps. The Bronze → Silver → Gold progression remains the same.
 
-### 2. Silver normalizes the source payload
+## Data model
 
-The API payloads for Electricity Maps are nested (`history`, `mix`, `import`, `export`, and storage sub-objects). Silver flattens and types these structures into stable, explicit tables.
+### Bronze
 
-### 3. Gold is business-oriented
+Bronze contains the original API responses and ingestion metadata.
 
-Gold is not a copy of raw data. It is an aggregation layer meant for reporting and BI: daily import/export balances and relative electricity mix by source.
+Bronze data is partitioned by ingestion date:
 
-### 4. Partitioning uses business-relevant keys
+```text
+data/
+└── bronze/
+    ├── electricity_mix/
+    │   └── year=YYYY/month=MM/day=DD/*.json
+    └── electricity_flows/
+        └── year=YYYY/month=MM/day=DD/*.json
+```
 
-- Bronze: ingestion timestamp (`year`, `month`, `day`)
-- Silver: data timestamp (`year`, `month`, `day`)
-- Gold: daily date (`date`)
+Raw files are treated as immutable. This preserves source lineage and allows transformations to be replayed.
 
-This aligns with the ETL assignment and makes incremental refreshes easier to reason about.
+### Silver — electricity mix
 
-### 5. Idempotency and deduplication
+The flattened mix dataset contains one row per target zone and timestamp with generation and storage information.
 
-The project uses business keys to avoid duplicate logical rows when the same ingestion is re-run. This is especially important for incremental jobs.
+| Column | Description |
+|---|---|
+| `zone` | Target market zone, e.g. `FR` |
+| `datetime` | Reference timestamp |
+| `updatedAt` | Last update timestamp from the API |
+| `ingestion_timestamp` | Bronze ingestion timestamp |
+| `temporalGranularity` | Source temporal granularity, typically `hourly` |
+| `isEstimated` | Source estimation flag |
+| `estimationMethod` | Source estimation method |
+| `breakdownType` | Schema type for the underlying mix breakdown |
+| Generation columns | Sources such as `nuclear`, `wind`, `solar`, `hydro`, `gas`, etc. |
+| Storage columns | Such as `hydro_storage_charge` and `hydro_storage_discharge` |
+| Flow columns | Such as `flows_imports` and `flows_exports` |
+| `year`, `month`, `day` | Data-date partition columns |
 
----
+### Silver — electricity flows
 
-## Silver schema descriptions
+The flow table uses a long format with one row per zone, timestamp, direction, and counterparty.
 
-### Silver mix table
+| Column | Description |
+|---|---|
+| `zone` | Target market zone |
+| `datetime` | Reference timestamp |
+| `updatedAt` | API update timestamp |
+| `ingestion_timestamp` | Bronze ingestion timestamp |
+| `temporalGranularity` | Usually `hourly` |
+| `direction` | `import` or `export` |
+| `flow_zone` | Neighboring/counterparty zone, e.g. `DE` |
+| `power_mw` | Hourly power flow in MW |
+| `year`, `month`, `day` | Data-date partition columns |
 
-The flattened mix dataset contains one row per zone and timestamp with source-level generation and storage information.
+The long format simplifies downstream netting and aggregation.
 
-Typical columns:
+### Gold — daily imports and exports
 
-- `zone`: target zone, for example `FR`
-- `datetime`: reference timestamp for the data
-- `updatedAt`: last update timestamp from the API payload
-- `ingestion_timestamp`: when the bronze file was ingested
-- `temporalGranularity`: `hourly`
-- `isEstimated`: boolean estimation flag
-- `estimationMethod`: source estimation method
-- `breakdownType`: schema type for the underlying mix breakdown
-- generation/source columns such as `nuclear`, `wind`, `solar`, `hydro`, `gas`, etc.
-- storage columns such as `hydro_storage_charge`, `hydro_storage_discharge`
-- flow columns such as `flows_imports`, `flows_exports`
-- partition columns: `year`, `month`, `day`
+Gold contains daily business-level aggregates grouped by target zone and counterparty.
 
-### Silver flow table
+Typical fields include:
 
-The flow table is normalized into a long format with one row per zone/timestamp/direction/counterparty pair.
+| Column | Description |
+|---|---|
+| `zone` | Target market zone |
+| `date` | Daily logical date |
+| `source_zone` / `destination_zone` | Counterparty zone |
+| `imports_mwh` / `exports_mwh` | Daily electricity amount in MWh |
+| `zone_name` / `source_zone_name` | Human-readable metadata |
+| `reference_datetimes` | Provenance information |
 
-Typical columns:
+The model is designed so bilateral counter-flows are netted rather than double-counted: a logical bilateral hourly pair contributes to either net imports or net exports.
 
-- `zone`: target zone
-- `datetime`: reference data timestamp
-- `updatedAt`: API update timestamp
-- `ingestion_timestamp`: bronze ingestion timestamp
-- `temporalGranularity`: usually `hourly`
-- `direction`: `import` or `export`
-- `flow_zone`: neighboring zone, such as `DE`
-- `power_mw`: hourly power flow in MW
-- partition columns: `year`, `month`, `day`
+### Gold — relative generation mix
 
-This schema makes downstream netting and aggregation much simpler because each row is already in a consistent long form.
+The relative mix table describes the contribution of generation sources to the daily mix for a zone.
 
----
-
-## Gold schema descriptions
-
-### Daily net import/export tables
-
-The gold layer computes one row per target zone and date, grouped by counterparty zone.
-
-Example fields:
-
-- `zone`: target market zone
-- `date`: daily logical date
-- `source_zone` or `destination_zone`: counterpart zone involved in trade
-- `imports_mwh` or `exports_mwh`: total daily net electricity amount in MWh
-- `zone_name` / `source_zone_name`: human-readable metadata for enrichment
-- `reference_datetimes`: ingestion timestamps used for provenance
-
-The model does not double-count counter-flows. A single bilateral hourly pair can only contribute to one channel: net import or net export.
-
-### Relative mix table
-
-This table describes how much each generation source contributed to the total daily mix for a zone.
-
-Typical fields:
+Typical fields include:
 
 - `zone`
 - `date`
-- `injection`-style percentage columns such as `nuclear_pct`, `wind_pct`, `solar_pct`
+- source percentage columns such as `nuclear_pct`, `wind_pct`, and `solar_pct`
 - `zone_name`
 - `ingestion_timestamp`
 
-The percentages are computed from the day’s aggregate source values and are rounded to a stable precision.
+Percentages are calculated from the day's aggregate source values and rounded to a stable precision.
 
----
+## Data processing and orchestration
 
-## Orchestration logic
+The `run_pipeline` function coordinates the end-to-end ETL flow:
 
-The orchestration layer coordinates the full ETL flow in a single function: `run_pipeline`.
-
-Responsibilities of the orchestration function:
-
-1. Create a configured API client.
-2. Download the mix and flow payloads for the target zone.
-3. Persist raw payloads to Bronze using `write_raw_response`.
-4. Read Bronze JSON files using the bronze reader.
-5. Flatten nested structures into Silver tables with `flatten_mix` and `flatten_flows`.
-6. Write Delta and Parquet outputs for both silver datasets.
-7. Fetch zone metadata and enrich the result with `transform_metadata` and `join_metadata`.
-8. Build Gold tables by day using `build_daily_net` and `build_daily_relative_mix`.
+1. Create a configured Electricity Maps client.
+2. Download generation mix and flow payloads.
+3. Persist raw payloads with `write_raw_response`.
+4. Read the Bronze JSON files.
+5. Flatten nested payloads using `flatten_mix` and `flatten_flows`.
+6. Persist Silver Delta and Parquet datasets.
+7. Fetch and join zone metadata.
+8. Build Gold datasets with `build_daily_net` and `build_daily_relative_mix`.
 9. Persist Gold outputs with the shared storage utility.
 
-This keeps the project modular while still making the full ETL run easy to reason about.
+Keeping these stages explicit makes the pipeline easier to test, debug, and replay.
 
----
+## Design decisions
 
-## Incremental ingestion logic
+### Bronze is immutable
 
-This project is designed for incremental ingestion and reruns.
+Raw API payloads are written as new ingestion records rather than edited in place. This preserves lineage and supports replay when source data or transformation logic changes.
 
-Key ideas:
+### Silver normalizes the source
 
-- Bronze is append-only; each response is saved under a unique timestamped file name.
-- Silver and Gold rely on business keys and time-partition columns to deduplicate updates.
-- Partial refreshes can reuse the same pattern by re-reading recent windows and writing new Bronze files for those windows.
-- Since the project writes by partition (`year`, `month`, `day`), daily or hourly re-runs can be ingested without rewriting the full historical dataset.
+Electricity Maps returns nested structures including `history`, `mix`, `import`, `export`, and storage objects. Silver converts these structures into stable, typed tables suitable for downstream processing.
 
-Recommended operational pattern:
+### Gold is business-oriented
 
-- keep a small overlap window during scheduled reruns, for example the last 24–48 hours,
-- allow the bronze layer to accumulate new raw files,
-- rebuild the impacted silver and gold partitions from the new data,
-- use deduplication and partition pruning to maintain pipeline efficiency.
+Gold is an aggregation layer for reporting and BI rather than a copy of the source data. It exposes daily import/export balances and relative generation mix.
 
-This gives you a safe, low-risk ingestion model for API data that may be revised retroactively.
+### Partitioning
 
----
+The project uses partitions aligned with the semantics of each layer:
 
-## Data quality and reliability notes
+- **Bronze:** ingestion timestamp — `year`, `month`, `day`
+- **Silver:** data timestamp — `year`, `month`, `day`
+- **Gold:** logical daily date — `date`
 
-The project includes explicit handling for:
+### Idempotency and deduplication
+
+The pipeline uses business keys to avoid duplicate logical rows when data is reprocessed. This is important for incremental runs and replay scenarios.
+
+The exact business keys and conflict behavior should be kept aligned with the transformation implementation.
+
+## Data quality and reliability
+
+The pipeline includes explicit handling for:
 
 - malformed or failed HTTP responses,
 - non-200 API statuses,
 - nested JSON flattening issues,
-- and duplicate business rows when reprocessing data.
+- duplicate business rows during reprocessing,
+- explicit schema coercion and stable output columns.
 
-The design prefers explicit schema coercion and stable output columns, rather than dynamic typing that changes between runs.
-
----
+For production use, useful additional checks include validation of required fields, expected temporal coverage, missing observations, and unexpected source-schema changes.
 
 ## Testing
 
-The project contains focused unit tests for the bronze writer, silver transformations, and gold netting logic.
-
-Run tests with:
+Run the test suite with:
 
 ```bash
 source .venv/bin/activate
 pytest -q
 ```
 
----
+The test suite contains focused tests for the Bronze writer, Silver transformations, and Gold netting logic.
 
-## Why Polars instead of pandas or PySpark?
+A useful next step is to maintain deterministic fixtures for representative API responses so transformation tests can run without external API access. An end-to-end fixture-based test for a representative multi-day batch can then verify the complete Bronze → Silver → Gold flow.
 
-I chose Polars for this project because the workload is a medium-sized, single-zone ETL with nested JSON payloads and explicit schema transformation, not a cluster-scale distributed analytics problem.
+## CI
 
-### Why Polars fits this project well
+The repository includes a GitHub Actions workflow at `.github/workflows/ci.yml`.
 
-- Fast local execution: Polars is highly optimized for columnar processing and performs very well for hourly and daily data in a local Python environment.
-- Clear schema control: the project relies on strong typing and explicit column definitions, which maps naturally to Polars DataFrames.
-- Natural handling of nested JSON: the Bronze-to-Silver step involves flattening nested payloads, which Polars handles elegantly with `unnest`, `explode`, and `struct` access.
-- Lower operational overhead: unlike PySpark, there is no cluster or Spark-session setup cost for a project that runs in a standard Python environment.
-- Better developer ergonomics for this use case: the transformation code remains readable and compact while still being fast enough for daily or multi-day refresh runs.
+The CI pipeline runs on pushes and pull requests and provides checks for:
 
-### Why not pandas?
+- dependency installation,
+- formatting,
+- Ruff linting,
+- broken imports,
+- and failing tests.
 
-Pandas is very good for quick analysis and notebook workflows, but for this kind of production ETL it is less attractive for a few reasons:
+A CI configuration can use:
 
-- It is less memory-efficient for larger tabular workloads than Polars.
-- It is not as ergonomic for strongly typed, schema-first transformations across nested records.
-- It can become slower and more cumbersome when the workflow includes repeated reshaping, filtering, and long format processing.
+```yaml
+- run: ruff format --check src tests
+- run: ruff check src tests
+- run: pytest -q
+```
 
-For an ETL that transforms nested API output into stable Silver tables and then aggregates into Gold tables, Polars provides a better speed-to-complexity trade-off.
+Using `ruff format --check` ensures CI verifies formatting without modifying the checkout.
+
+## Why Polars?
+
+Polars was selected for its columnar execution model, explicit schema handling, and suitability for local data transformation.
+
+For this project, it provides a straightforward way to:
+
+- flatten nested API payloads,
+- enforce explicit schemas,
+- reshape hourly observations,
+- process long-form flow data,
+- and calculate daily aggregates.
+
+The workload is a single-zone ETL with hourly and daily data, so a local Polars pipeline avoids the operational complexity of a distributed processing framework.
 
 ### Why not PySpark?
 
-PySpark would be a more appropriate choice if this project were scaling to:
+PySpark becomes more compelling when the workload requires distributed processing, multi-node execution, very large datasets, or integration with a larger Spark-based platform.
 
-- very large datasets,
-- multi-node processing,
-- distributed joins across many partitions,
-- or a large enterprise data platform with cluster orchestration.
+For the current workload, those capabilities would introduce additional operational complexity without a clear requirement.
 
-For this repository, PySpark would add operational complexity without a clear gain. The current workload is compact, consistent, and local. A single-node Polars pipeline is simpler to test, debug, and reason about while still matching the data engineering requirements of the assignment.
+### Why not pandas?
 
----
+Pandas would also be capable of handling a pipeline of this scale. Polars was chosen here because its columnar execution model, schema-oriented transformations, and nested-data operations fit the project's implementation style.
+
+The choice is therefore specific to this workload rather than a claim that Polars is universally preferable to pandas.
 
 ## Potential improvements
 
-### Linting and static checks
+The core ETL flow is already implemented. Possible next steps include:
 
-The project already has a Ruff setup, but it is still close to a generic template. For a data pipeline, it is worth narrowing it to the rules that help with correctness, maintainability, and import hygiene.
+### Developer tooling
 
-This keeps the lint rules focused on the issues most relevant to code review and ETL maintainability: unused imports, unsafe patterns, unnecessary complexity, and docstring consistency without being overly noisy.
+- Add a `pre-commit` configuration for formatting, linting, and tests.
+- Add stricter type checking with mypy or Pyright.
+- Narrow Ruff rules to the checks most useful for this project.
 
-### Additional engineering recommendations
+### Data contracts and lineage
 
-- Add a `pre-commit` hook to run `ruff check . --fix` and `pytest -q` before commits.
-- Introduce stricter typing checks with `mypy` or Pyright for the transformation functions and settings objects.
-- Add a small `schema` contract layer for Bronze/Silver payload validation so API drift is caught quickly.
-- Add a manifest or checksum table for raw ingestions to make replay and lineage easier to audit.
-- Expand the test suite with a real fixture-based end-to-end run for one representative multi-day batch.
-- Add observability for retries, API rate-limit handling, and delayed data quality checks.
-- Move the raw and processed data lake to S3-compatible storage, with Bronze/Silver/Gold partitions landing in separate AWS buckets or prefixes for production-scale persistence and access patterns.
+- Add a schema/contract layer for validating Bronze and Silver payloads.
+- Add manifests or checksums for raw ingestions.
+- Record source/API version information where available.
+- Add explicit data-quality checks for missing or unexpected hourly observations.
 
-These are the highest-value upgrades for a project that already has the core medallion flow working.
+### Reliability and observability
 
----
+- Add retry and backoff handling for transient API failures.
+- Add API rate-limit handling.
+- Add metrics for ingestion duration, row counts, rejected records, and missing periods.
+- Add fixture-based end-to-end tests.
 
-## Current CI pipeline
+### Production storage
 
-The project already includes a GitHub Actions workflow at [.github/workflows/ci.yml](.github/workflows/ci.yml). It is a simple but useful CI baseline for the ETL codebase.
-
-The workflow currently runs on both push and pull_request events and executes the following steps:
-
-```yaml
-name: CI
-
-on:
-  push:
-  pull_request:
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[dev]"
-      - run: ruff format src tests
-      - run: ruff check src tests
-      - run: pytest -q
-```
-
-This gives the project a fast default safety net for:
-
-- dependency installation problems,
-- broken imports,
-- failing unit tests,
-- and formatting or lint regressions.
-
-It is intentionally lightweight and suitable for a project of this size, while still helping catch the most common ETL issues before merge. 
+For a production deployment, the local data lake could be moved to S3-compatible object storage, with Bronze, Silver, and Gold datasets separated by prefixes or buckets according to the required access and retention model.
