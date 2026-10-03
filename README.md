@@ -292,21 +292,6 @@ For this repository, PySpark would add operational complexity without a clear ga
 
 The project already has a Ruff setup, but it is still close to a generic template. For a data pipeline, it is worth narrowing it to the rules that help with correctness, maintainability, and import hygiene.
 
-Example project-specific configuration:
-
-```toml
-[tool.ruff]
-line-length = 100
-indent-width = 4
-target-version = "py311"
-src = ["src"]
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "ARG", "RET", "PL", "D"]
-ignore = ["D100", "D104", "D203", "D213", "D401"]
-fixable = ["ALL"]
-```
-
 This keeps the lint rules focused on the issues most relevant to code review and ETL maintainability: unused imports, unsafe patterns, unnecessary complexity, and docstring consistency without being overly noisy.
 
 ### Additional engineering recommendations
@@ -317,6 +302,7 @@ This keeps the lint rules focused on the issues most relevant to code review and
 - Add a manifest or checksum table for raw ingestions to make replay and lineage easier to audit.
 - Expand the test suite with a real fixture-based end-to-end run for one representative multi-day batch.
 - Add observability for retries, API rate-limit handling, and delayed data quality checks.
+- Move the raw and processed data lake to S3-compatible storage, with Bronze/Silver/Gold partitions landing in separate AWS buckets or prefixes for production-scale persistence and access patterns.
 
 These are the highest-value upgrades for a project that already has the core medallion flow working.
 
