@@ -23,7 +23,7 @@ Setup:
 ```bash
 git clone https://github.com/TCACastelijns/hda-electricity-maps-etl.git
 cd hda-electricity-maps-etl
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ".[dev]"
@@ -67,7 +67,6 @@ run_pipeline(
 Equivalent CLI-style flow (depending on your project entrypoint):
 
 ```bash
-source .venv/bin/activate
 hda-etl run --data-root data --zone FR
 ```
 
