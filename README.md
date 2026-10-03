@@ -206,8 +206,6 @@ Typical fields include:
 | `zone_name` / `source_zone_name` | Human-readable metadata |
 | `reference_datetimes` | Provenance information |
 
-The model is designed so bilateral counter-flows are netted rather than double-counted: a logical bilateral hourly pair contributes to either net imports or net exports.
-
 ### Gold — relative generation mix
 
 The relative mix table describes the contribution of generation sources to the daily mix for a zone.
