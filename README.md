@@ -232,7 +232,6 @@ The project includes explicit handling for:
 - malformed or failed HTTP responses,
 - non-200 API statuses,
 - nested JSON flattening issues,
-- missing source columns when not present in a given payload,
 - and duplicate business rows when reprocessing data.
 
 The design prefers explicit schema coercion and stable output columns, rather than dynamic typing that changes between runs.
@@ -249,6 +248,41 @@ Run tests with:
 source .venv/bin/activate
 pytest -q
 ```
+
+---
+
+## Why Polars instead of pandas or PySpark?
+
+I chose Polars for this project because the workload is a medium-sized, single-zone ETL with nested JSON payloads and explicit schema transformation, not a cluster-scale distributed analytics problem.
+
+### Why Polars fits this project well
+
+- Fast local execution: Polars is highly optimized for columnar processing and performs very well for hourly and daily data in a local Python environment.
+- Clear schema control: the project relies on strong typing and explicit column definitions, which maps naturally to Polars DataFrames.
+- Natural handling of nested JSON: the Bronze-to-Silver step involves flattening nested payloads, which Polars handles elegantly with `unnest`, `explode`, and `struct` access.
+- Lower operational overhead: unlike PySpark, there is no cluster or Spark-session setup cost for a project that runs in a standard Python environment.
+- Better developer ergonomics for this use case: the transformation code remains readable and compact while still being fast enough for daily or multi-day refresh runs.
+
+### Why not pandas?
+
+Pandas is very good for quick analysis and notebook workflows, but for this kind of production ETL it is less attractive for a few reasons:
+
+- It is less memory-efficient for larger tabular workloads than Polars.
+- It is not as ergonomic for strongly typed, schema-first transformations across nested records.
+- It can become slower and more cumbersome when the workflow includes repeated reshaping, filtering, and long format processing.
+
+For an ETL that transforms nested API output into stable Silver tables and then aggregates into Gold tables, Polars provides a better speed-to-complexity trade-off.
+
+### Why not PySpark?
+
+PySpark would be a more appropriate choice if this project were scaling to:
+
+- very large datasets,
+- multi-node processing,
+- distributed joins across many partitions,
+- or a large enterprise data platform with cluster orchestration.
+
+For this repository, PySpark would add operational complexity without a clear gain. The current workload is compact, consistent, and local. A single-node Polars pipeline is simpler to test, debug, and reason about while still matching the data engineering requirements of the assignment.
 
 ---
 
@@ -281,23 +315,46 @@ This keeps the lint rules focused on the issues most relevant to code review and
 - Introduce stricter typing checks with `mypy` or Pyright for the transformation functions and settings objects.
 - Add a small `schema` contract layer for Bronze/Silver payload validation so API drift is caught quickly.
 - Add a manifest or checksum table for raw ingestions to make replay and lineage easier to audit.
-- Add retry and backoff metrics plus an alerting threshold for API failures and sudden schema changes.
 - Expand the test suite with a real fixture-based end-to-end run for one representative multi-day batch.
-- Consider a `dbt` or another declarative transformation layer if the project grows beyond a few curated tables.
-- Add a CI pipeline that runs linting, tests, and a minimal smoke test on every PR.
+- Add observability for retries, API rate-limit handling, and delayed data quality checks.
 
 These are the highest-value upgrades for a project that already has the core medallion flow working.
 
-## Suggested review order
+---
 
-If you are reading the codebase for review or debugging, a good path is:
+## Current CI pipeline
 
-1. `src/hda_etl/utils/api_client.py`
-2. `src/hda_etl/layers/bronze.py`
-3. `src/hda_etl/layers/silver.py`
-4. `src/hda_etl/layers/gold.py`
-5. `src/hda_etl/utils/storage.py`
-6. `src/hda_etl/pipeline.py`
-7. `tests/`
+The project already includes a GitHub Actions workflow at [.github/workflows/ci.yml](.github/workflows/ci.yml). It is a simple but useful CI baseline for the ETL codebase.
 
-This follows the actual data flow from raw API call to medallion transformation and final storage.
+The workflow currently runs on both push and pull_request events and executes the following steps:
+
+```yaml
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - run: ruff format src tests
+      - run: ruff check src tests
+      - run: pytest -q
+```
+
+This gives the project a fast default safety net for:
+
+- dependency installation problems,
+- broken imports,
+- failing unit tests,
+- and formatting or lint regressions.
+
+It is intentionally lightweight and suitable for a project of this size, while still helping catch the most common ETL issues before merge. 
