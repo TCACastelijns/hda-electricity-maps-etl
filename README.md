@@ -25,7 +25,8 @@ git clone https://github.com/TCACastelijns/hda-electricity-maps-etl.git
 cd hda-electricity-maps-etl
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e ".[dev]"
 ```
 
 Set the API key:
