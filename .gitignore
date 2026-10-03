@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+.env
+.DS_Store
+
+# Generated pipeline data
+data/bronze/
+data/silver/
+data/gold/
+
+# Local credentials
+.env*
+!.env.example
